@@ -177,6 +177,10 @@ public class ThrottlingAllocationDecider extends AllocationDecider {
 
             int primariesInRecovery = allocation.routingNodes().getInitialPrimariesIncomingRecoveries(node.nodeId());
 
+            logger.debug( "ThrottlingAllocationDecider decision, throttle: [{}] primary recovery limit [{}],"
+                + " primaries in recovery [{}] invoked for [{}] on node [{}]",
+                primariesInRecovery >= primariesInitialRecoveries, primariesInitialRecoveries,
+                primariesInRecovery, shardRouting, node.node() );
             if (primariesInRecovery >= primariesInitialRecoveries) {
                 // TODO: Should index creation not be throttled for primary shards?
                 return allocation.decision(

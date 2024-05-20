@@ -10,6 +10,7 @@ package org.opensearch.gateway;
 
 import org.apache.logging.log4j.Logger;
 import org.opensearch.cluster.node.DiscoveryNode;
+import org.opensearch.cluster.routing.RoutingNodes;
 import org.opensearch.cluster.routing.ShardRouting;
 import org.opensearch.cluster.routing.UnassignedInfo;
 import org.opensearch.cluster.routing.allocation.AllocateUnassignedDecision;
@@ -29,6 +30,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * Allocates replica shards in a batch mode
@@ -98,25 +100,43 @@ public abstract class ReplicaShardBatchAllocator extends ReplicaShardAllocator {
 
     @Override
     public AllocateUnassignedDecision makeAllocationDecision(ShardRouting unassignedShard, RoutingAllocation allocation, Logger logger) {
-        return makeAllocationDecision(Collections.singletonList(unassignedShard), allocation, logger).get(unassignedShard);
+        if (isResponsibleFor(unassignedShard) == false) {
+            return AllocateUnassignedDecision.NOT_TAKEN;
+        }
+        Tuple<Decision, Map<String, NodeAllocationResult>> result = canBeAllocatedToAtLeastOneNode(unassignedShard, allocation);
+        Decision allocateDecision = result.v1();
+        if (allocateDecision.type() != Decision.Type.YES
+            && (allocation.debugDecision() == false || hasInitiatedFetching(unassignedShard) == false)) {
+            // only return early if we are not in explain mode, or we are in explain mode but we have not
+            // yet attempted to fetch any shard data
+            logger.trace("{}: ignoring allocation, can't be allocated on any node", unassignedShard);
+            return AllocateUnassignedDecision.no(
+                UnassignedInfo.AllocationStatus.fromDecision(allocateDecision.type()),
+                result.v2() != null ? new ArrayList<>(result.v2().values()) : null
+            );
+        }
+
+        final FetchResult<NodeStoreFilesMetadataBatch> shardsState = fetchData(List.of(unassignedShard), Collections.emptyList(), allocation);
+        Map<DiscoveryNode, StoreFilesMetadata> nodeShardStores = convertToNodeStoreFilesMetadataMap(unassignedShard, shardsState);
+        return getAllocationDecision(unassignedShard, allocation, nodeShardStores, result, logger);
     }
 
-    @Override
-    public HashMap<ShardRouting, AllocateUnassignedDecision> makeAllocationDecision(
-        List<ShardRouting> shards,
-        RoutingAllocation allocation,
-        Logger logger
-    ) {
-        HashMap<ShardRouting, AllocateUnassignedDecision> shardAllocationDecisions = new HashMap<>();
+    /**
+     * Allocate Batch of unassigned shard  to nodes where valid copies of the shard already exists
+     * @param shardRoutings the shards to allocate
+     * @param allocation the allocation state container object
+     */
+    public void allocateUnassignedBatch(List<ShardRouting> shardRoutings, RoutingAllocation allocation) {
+        HashMap<ShardId, AllocateUnassignedDecision> ineligibleShardAllocationDecisions = new HashMap<>();
         final boolean explain = allocation.debugDecision();
         List<ShardRouting> eligibleShards = new ArrayList<>();
         List<ShardRouting> ineligibleShards = new ArrayList<>();
         HashMap<ShardRouting, Tuple<Decision, Map<String, NodeAllocationResult>>> nodeAllocationDecisions = new HashMap<>();
-        for (ShardRouting shard : shards) {
+        for (ShardRouting shard : shardRoutings) {
             if (!isResponsibleFor(shard)) {
                 // this allocator n is not responsible for allocating this shard
                 ineligibleShards.add(shard);
-                shardAllocationDecisions.put(shard, AllocateUnassignedDecision.NOT_TAKEN);
+                ineligibleShardAllocationDecisions.put(shard.shardId(), AllocateUnassignedDecision.NOT_TAKEN);
                 continue;
             }
 
@@ -126,8 +146,9 @@ public abstract class ReplicaShardBatchAllocator extends ReplicaShardAllocator {
                 // only return early if we are not in explain mode, or we are in explain mode but we have not
                 // yet attempted to fetch any shard data
                 logger.trace("{}: ignoring allocation, can't be allocated on any node", shard);
-                shardAllocationDecisions.put(
-                    shard,
+                ineligibleShards.add(shard);
+                ineligibleShardAllocationDecisions.put(
+                    shard.shardId(),
                     AllocateUnassignedDecision.no(
                         UnassignedInfo.AllocationStatus.fromDecision(allocationDecision.type()),
                         result.v2() != null ? new ArrayList<>(result.v2().values()) : null
@@ -142,27 +163,34 @@ public abstract class ReplicaShardBatchAllocator extends ReplicaShardAllocator {
             eligibleShards.add(shard);
         }
 
-        // Do not call fetchData if there are no eligible shards
-        if (eligibleShards.isEmpty()) {
-            return shardAllocationDecisions;
-        }
         // only fetch data for eligible shards
         final FetchResult<NodeStoreFilesMetadataBatch> shardsState = fetchData(eligibleShards, ineligibleShards, allocation);
 
-        for (ShardRouting unassignedShard : eligibleShards) {
-            Tuple<Decision, Map<String, NodeAllocationResult>> result = nodeAllocationDecisions.get(unassignedShard);
-            shardAllocationDecisions.put(
-                unassignedShard,
-                getAllocationDecision(
-                    unassignedShard,
-                    allocation,
-                    convertToNodeStoreFilesMetadataMap(unassignedShard, shardsState),
-                    result,
-                    logger
-                )
-            );
+        List<ShardId> shardIdsFromBatch = shardRoutings.stream()
+            .map(shardRouting -> shardRouting.shardId())
+            .collect(Collectors.toList());
+        RoutingNodes.UnassignedShards.UnassignedIterator iterator = allocation.routingNodes().unassigned().iterator();
+        while (iterator.hasNext()) {
+            ShardRouting unassignedShard = iterator.next();
+
+            if (shardIdsFromBatch.contains(unassignedShard.shardId())) {
+                logger.info("Executing allocation decision for shard {}", shardIdsFromBatch);
+                AllocateUnassignedDecision allocateUnassignedDecision;
+                if (ineligibleShardAllocationDecisions.containsKey(unassignedShard.shardId())) {
+                    allocateUnassignedDecision = ineligibleShardAllocationDecisions.get(unassignedShard.shardId());
+                } else {
+                    Tuple<Decision, Map<String, NodeAllocationResult>> result = nodeAllocationDecisions.get(unassignedShard);
+                    allocateUnassignedDecision = getAllocationDecision(
+                        unassignedShard,
+                        allocation,
+                        convertToNodeStoreFilesMetadataMap(unassignedShard, shardsState),
+                        result,
+                        logger
+                    );
+                }
+                executeDecision(unassignedShard, allocateUnassignedDecision, allocation, iterator);
+            }
         }
-        return shardAllocationDecisions;
     }
 
     private Map<DiscoveryNode, StoreFilesMetadata> convertToNodeStoreFilesMetadataMap(
