@@ -9,6 +9,7 @@ package org.opensearch.gateway;
 
 import org.apache.lucene.codecs.Codec;
 import org.opensearch.Version;
+import org.opensearch.cluster.ClusterInfo;
 import org.opensearch.cluster.ClusterName;
 import org.opensearch.cluster.ClusterState;
 import org.opensearch.cluster.OpenSearchAllocationTestCase;
@@ -19,12 +20,13 @@ import org.opensearch.cluster.node.DiscoveryNodes;
 import org.opensearch.cluster.routing.RoutingNodes;
 import org.opensearch.cluster.routing.RoutingTable;
 import org.opensearch.cluster.routing.ShardRouting;
+import org.opensearch.cluster.routing.ShardRoutingState;
 import org.opensearch.cluster.routing.UnassignedInfo;
-import org.opensearch.cluster.routing.allocation.AllocateUnassignedDecision;
-import org.opensearch.cluster.routing.allocation.AllocationDecision;
 import org.opensearch.cluster.routing.allocation.RoutingAllocation;
 import org.opensearch.cluster.routing.allocation.decider.AllocationDeciders;
+import org.opensearch.cluster.routing.allocation.decider.ThrottlingAllocationDecider;
 import org.opensearch.common.Nullable;
+import org.opensearch.common.settings.ClusterSettings;
 import org.opensearch.common.settings.Settings;
 import org.opensearch.common.util.set.Sets;
 import org.opensearch.core.index.shard.ShardId;
@@ -44,6 +46,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 import static org.opensearch.cluster.routing.UnassignedInfo.Reason.CLUSTER_RECOVERED;
 
@@ -69,13 +72,6 @@ public class PrimaryShardBatchAllocatorTests extends OpenSearchAllocationTestCas
         this.batchAllocator = new TestBatchAllocator();
     }
 
-    private void allocateAllUnassigned(final RoutingAllocation allocation) {
-        final RoutingNodes.UnassignedShards.UnassignedIterator iterator = allocation.routingNodes().unassigned().iterator();
-        while (iterator.hasNext()) {
-            batchAllocator.allocateUnassigned(iterator.next(), allocation, iterator);
-        }
-    }
-
     private void allocateAllUnassignedBatch(final RoutingAllocation allocation) {
         final RoutingNodes.UnassignedShards.UnassignedIterator iterator = allocation.routingNodes().unassigned().iterator();
         List<ShardRouting> shardsToBatch = new ArrayList<>();
@@ -85,61 +81,20 @@ public class PrimaryShardBatchAllocatorTests extends OpenSearchAllocationTestCas
         batchAllocator.allocateUnassignedBatch(shardsToBatch, allocation);
     }
 
-    public void testMakeAllocationDecisionDataFetching() {
-        final RoutingAllocation allocation = routingAllocationWithOnePrimary(noAllocationDeciders(), CLUSTER_RECOVERED, "allocId1");
-
-        List<ShardRouting> shards = new ArrayList<>();
-        allocateAllUnassignedBatch(allocation);
-        ShardRouting shard = allocation.routingTable().getIndicesRouting().get("test").shard(shardId.id()).primaryShard();
-        shards.add(shard);
-        HashMap<ShardRouting, AllocateUnassignedDecision> allDecisions = batchAllocator.makeAllocationDecision(shards, allocation, logger);
-        // verify we get decisions for all the shards
-        assertEquals(shards.size(), allDecisions.size());
-        assertEquals(shards, new ArrayList<>(allDecisions.keySet()));
-        assertEquals(AllocationDecision.AWAITING_INFO, allDecisions.get(shard).getAllocationDecision());
-    }
-
-    public void testMakeAllocationDecisionForReplicaShard() {
-        final RoutingAllocation allocation = routingAllocationWithOnePrimary(noAllocationDeciders(), CLUSTER_RECOVERED, "allocId1");
-
-        List<ShardRouting> replicaShards = allocation.routingTable().getIndicesRouting().get("test").shard(shardId.id()).replicaShards();
-        List<ShardRouting> shards = new ArrayList<>(replicaShards);
-        HashMap<ShardRouting, AllocateUnassignedDecision> allDecisions = batchAllocator.makeAllocationDecision(shards, allocation, logger);
-        // verify we get decisions for all the shards
-        assertEquals(shards.size(), allDecisions.size());
-        assertEquals(shards, new ArrayList<>(allDecisions.keySet()));
-        assertFalse(allDecisions.get(replicaShards.get(0)).isDecisionTaken());
-    }
-
-    public void testMakeAllocationDecisionDataFetched() {
-        final RoutingAllocation allocation = routingAllocationWithOnePrimary(noAllocationDeciders(), CLUSTER_RECOVERED, "allocId1");
-
-        List<ShardRouting> shards = new ArrayList<>();
-        ShardRouting shard = allocation.routingTable().getIndicesRouting().get("test").shard(shardId.id()).primaryShard();
-        shards.add(shard);
-        batchAllocator.addData(node1, "allocId1", true, new ReplicationCheckpoint(shardId, 20, 101, 1, Codec.getDefault().getName()));
-        HashMap<ShardRouting, AllocateUnassignedDecision> allDecisions = batchAllocator.makeAllocationDecision(shards, allocation, logger);
-        // verify we get decisions for all the shards
-        assertEquals(shards.size(), allDecisions.size());
-        assertEquals(shards, new ArrayList<>(allDecisions.keySet()));
-        assertEquals(AllocationDecision.YES, allDecisions.get(shard).getAllocationDecision());
-    }
-
-    public void testMakeAllocationDecisionDataFetchedMultipleShards() {
+    public void testAllocateUnassignedBatch() {
+        ClusterSettings clusterSettings = new ClusterSettings(Settings.EMPTY, ClusterSettings.BUILT_IN_CLUSTER_SETTINGS);
+        AllocationDeciders allocationDeciders = randomAllocationDeciders(Settings.builder().build(), clusterSettings, random());
         setUpShards(2);
-        final RoutingAllocation allocation = routingAllocationWithMultiplePrimaries(
-            noAllocationDeciders(),
+        final RoutingAllocation routingAllocation = routingAllocationWithMultiplePrimaries(
+            allocationDeciders,
             CLUSTER_RECOVERED,
             2,
             0,
             "allocId-0",
             "allocId-1"
         );
-        List<ShardRouting> shards = new ArrayList<>();
+
         for (ShardId shardId : shardsInBatch) {
-            ShardRouting shard = allocation.routingTable().getIndicesRouting().get("test").shard(shardId.id()).primaryShard();
-            allocation.routingTable().getIndicesRouting().get("test").shard(shardId.id()).primaryShard().recoverySource();
-            shards.add(shard);
             batchAllocator.addShardData(
                 node1,
                 "allocId-" + shardId.id(),
@@ -149,13 +104,56 @@ public class PrimaryShardBatchAllocatorTests extends OpenSearchAllocationTestCas
                 null
             );
         }
-        HashMap<ShardRouting, AllocateUnassignedDecision> allDecisions = batchAllocator.makeAllocationDecision(shards, allocation, logger);
-        // verify we get decisions for all the shards
-        assertEquals(shards.size(), allDecisions.size());
-        assertEquals(new HashSet<>(shards), allDecisions.keySet());
-        for (ShardRouting shard : shards) {
-            assertEquals(AllocationDecision.YES, allDecisions.get(shard).getAllocationDecision());
+
+        allocateAllUnassignedBatch(routingAllocation);
+
+        assertEquals(0, routingAllocation.routingNodes().unassigned().size());
+        List<ShardRouting> initializingShards = routingAllocation.routingNodes().shardsWithState(ShardRoutingState.INITIALIZING);
+        assertEquals(2, initializingShards.size());
+        assertTrue(shardsInBatch.contains(initializingShards.get(0).shardId()));
+        assertTrue(shardsInBatch.contains(initializingShards.get(1).shardId()));
+        assertEquals(2, routingAllocation.routingNodes().getInitialPrimariesIncomingRecoveries(node1.getId()));
+    }
+
+    public void testAllocateUnassignedBatchThrottlingAllocationDeciderIsHonoured() {
+        ClusterSettings clusterSettings = new ClusterSettings(Settings.EMPTY, ClusterSettings.BUILT_IN_CLUSTER_SETTINGS);
+        AllocationDeciders allocationDeciders = randomAllocationDeciders(
+            Settings.builder()
+                .put(ThrottlingAllocationDecider.CLUSTER_ROUTING_ALLOCATION_NODE_INITIAL_PRIMARIES_RECOVERIES_SETTING.getKey(), 1)
+                .build(),
+            clusterSettings,
+            random()
+        );
+        setUpShards(2);
+        final RoutingAllocation routingAllocation = routingAllocationWithMultiplePrimaries(
+            allocationDeciders,
+            CLUSTER_RECOVERED,
+            2,
+            0,
+            "allocId-0",
+            "allocId-1"
+        );
+
+        for (ShardId shardId : shardsInBatch) {
+            batchAllocator.addShardData(
+                node1,
+                "allocId-" + shardId.id(),
+                shardId,
+                true,
+                new ReplicationCheckpoint(shardId, 20, 101, 1, Codec.getDefault().getName()),
+                null
+            );
         }
+
+        allocateAllUnassignedBatch(routingAllocation);
+
+        // Verify the throttling decider was not throttled, recovering shards on node greater than initial concurrent recovery setting
+        assertEquals(1, routingAllocation.routingNodes().getInitialPrimariesIncomingRecoveries(node1.getId()));
+        List<ShardRouting> initializingShards = routingAllocation.routingNodes().shardsWithState(ShardRoutingState.INITIALIZING);
+        assertEquals(1, initializingShards.size());
+        Set<String> nodesWithInitialisingShards = initializingShards.stream().map(ShardRouting::currentNodeId).collect(Collectors.toSet());
+        assertEquals(1, nodesWithInitialisingShards.size());
+        assertEquals(Collections.singleton(node1.getId()), nodesWithInitialisingShards);
     }
 
     private RoutingAllocation routingAllocationWithOnePrimary(
@@ -235,7 +233,7 @@ public class PrimaryShardBatchAllocatorTests extends OpenSearchAllocationTestCas
             .routingTable(routingTableBuilder.build())
             .nodes(DiscoveryNodes.builder().add(node1).add(node2).add(node3))
             .build();
-        return new RoutingAllocation(deciders, new RoutingNodes(state, false), state, null, null, System.nanoTime());
+        return new RoutingAllocation(deciders, new RoutingNodes(state, false), state, ClusterInfo.EMPTY, null, System.nanoTime());
     }
 
     class TestBatchAllocator extends PrimaryShardBatchAllocator {
