@@ -552,7 +552,11 @@ public class JoinTaskExecutor implements ClusterStateTaskExecutor<JoinTaskExecut
         List<String> reposToSkip = new ArrayList<>(1);
         // find a remote node which has routing table configured
         Optional<DiscoveryNode> remoteRoutingTableNode = existingNodes.stream()
-            .filter(node -> node.isRemoteStoreNode() && RemoteStoreNodeAttribute.getRoutingTableRepoName(node.getAttributes()) != null)
+            .filter(
+                node -> node.isRemoteStoreNode()
+                    && RemoteStoreNodeAttribute.getRoutingTableRepoName(node.getAttributes()) != null
+                    && RemoteStoreNodeAttribute.getSegmentRepoName(node.getAttributes()) != null
+            )
             .findFirst();
         // If none of the existing nodes have routing table repo, then we skip this repo check if present in joining node.
         // This ensures a new node with remote routing table repo is able to join the cluster.
