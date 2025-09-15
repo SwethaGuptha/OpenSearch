@@ -34,11 +34,12 @@ package org.opensearch.cluster.coordination;
 import org.apache.logging.log4j.Level;
 import org.opensearch.Version;
 import org.opensearch.action.ActionListenerResponseHandler;
+import org.opensearch.action.admin.indices.rollover.RolloverInfo;
 import org.opensearch.action.support.PlainActionFuture;
 import org.opensearch.cluster.ClusterName;
 import org.opensearch.cluster.ClusterState;
 import org.opensearch.cluster.NotClusterManagerException;
-import org.opensearch.cluster.metadata.Metadata;
+import org.opensearch.cluster.metadata.*;
 import org.opensearch.cluster.node.DiscoveryNode;
 import org.opensearch.cluster.service.ClusterService;
 import org.opensearch.common.SetOnce;
@@ -56,30 +57,25 @@ import org.opensearch.test.transport.CapturingTransport;
 import org.opensearch.test.transport.CapturingTransport.CapturedRequest;
 import org.opensearch.test.transport.MockTransport;
 import org.opensearch.threadpool.ThreadPool;
-import org.opensearch.transport.BytesTransportRequest;
-import org.opensearch.transport.RemoteTransportException;
-import org.opensearch.transport.TransportException;
-import org.opensearch.transport.TransportRequest;
-import org.opensearch.transport.TransportService;
+import org.opensearch.transport.*;
 
 import java.io.IOException;
-import java.util.Collections;
-import java.util.Optional;
+import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
 
+import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.equalTo;
+import static org.hamcrest.core.Is.is;
+import static org.mockito.Mockito.mock;
 import static org.opensearch.cluster.coordination.JoinHelper.VALIDATE_COMPRESSED_JOIN_ACTION_NAME;
 import static org.opensearch.cluster.coordination.JoinHelper.VALIDATE_JOIN_ACTION_NAME;
 import static org.opensearch.monitor.StatusInfo.Status.HEALTHY;
 import static org.opensearch.monitor.StatusInfo.Status.UNHEALTHY;
 import static org.opensearch.node.Node.NODE_NAME_SETTING;
-import static org.hamcrest.Matchers.containsString;
-import static org.hamcrest.Matchers.equalTo;
-import static org.hamcrest.core.Is.is;
-import static org.mockito.Mockito.mock;
 
 public class JoinHelperTests extends OpenSearchTestCase {
     private final NamedWriteableRegistry namedWriteableRegistry = DEFAULT_NAMED_WRITABLE_REGISTRY;
@@ -111,11 +107,15 @@ public class JoinHelperTests extends OpenSearchTestCase {
             (joinRequest, joinCallback) -> {
                 throw new AssertionError();
             },
-            startJoinRequest -> { throw new AssertionError(); },
+            startJoinRequest -> {
+                throw new AssertionError();
+            },
             Collections.emptyList(),
-            (s, p, r) -> {},
+            (s, p, r) -> {
+            },
             () -> new StatusInfo(HEALTHY, "info"),
-            nodeCommissioned -> {},
+            nodeCommissioned -> {
+            },
             namedWriteableRegistry
         );
         transportService.start();
@@ -298,11 +298,15 @@ public class JoinHelperTests extends OpenSearchTestCase {
             (joinRequest, joinCallback) -> {
                 throw new AssertionError();
             },
-            startJoinRequest -> { throw new AssertionError(); },
+            startJoinRequest -> {
+                throw new AssertionError();
+            },
             Collections.emptyList(),
-            (s, p, r) -> {},
+            (s, p, r) -> {
+            },
             () -> nodeHealthServiceStatus.get(),
-            nodeCommissioned -> {},
+            nodeCommissioned -> {
+            },
             namedWriteableRegistry
         );
         transportService.start();
@@ -454,6 +458,47 @@ public class JoinHelperTests extends OpenSearchTestCase {
         assertTrue(t.getCause().getMessage().contains("different cluster uuid"));
     }
 
+    public void testJoinHelperCachingOnClusterStateDifferentNodeVersions() throws ExecutionException, InterruptedException, TimeoutException {
+        TestClusterSetup testCluster = getTestClusterSetup(Version.V_2_19_0, false);
+        final CompletableFuture<Throwable> future = new CompletableFuture<>();
+        ActionListener<TransportResponse.Empty> listener = new ActionListener<>() {
+            @Override
+            public void onResponse(TransportResponse.Empty empty) {
+                logger.info("validation successful for 2.19 node");
+            }
+
+            @Override
+            public void onFailure(Exception e) {
+                future.completeExceptionally(new AssertionError("validate join should not fail here"));
+            }
+        };
+        testCluster.joinHelper.sendValidateJoinRequest(testCluster.localNode, testCluster.localClusterState, listener);
+        // validation will pass due to cached cluster state
+        DiscoveryNode localNode31 = new DiscoveryNode("node1", buildNewFakeTransportAddress(), Version.CURRENT);
+
+        final CompletableFuture<Throwable> futureNew = new CompletableFuture<>();
+        ActionListener<TransportResponse.Empty> listenerNew = new ActionListener<>() {
+            @Override
+            public void onResponse(TransportResponse.Empty empty) {
+                logger.info("validation successful for 3.1 node");
+            }
+
+            @Override
+            public void onFailure(Exception e) {
+                futureNew.completeExceptionally(new AssertionError("validate join should not fail here"));
+            }
+        };
+        ClusterState randomState = ClusterState.builder(new ClusterName("random"))
+            .stateUUID("random2")
+            .version(testCluster.localClusterState.version())
+            .build();
+        testCluster.joinHelper.sendValidateJoinRequest(localNode31, randomState, listenerNew);
+
+        testCluster.deterministicTaskQueue.runAllTasks();
+
+        Throwable t = futureNew.get(60, TimeUnit.SECONDS);
+    }
+
     private TestClusterSetup getTestClusterSetup(Version version, boolean isCapturingTransport) {
         version = version == null ? Version.CURRENT : version;
         DeterministicTaskQueue deterministicTaskQueue = new DeterministicTaskQueue(
@@ -464,8 +509,56 @@ public class JoinHelperTests extends OpenSearchTestCase {
         CapturingTransport capturingTransport = new CapturingTransport();
         DiscoveryNode localNode = new DiscoveryNode("node0", buildNewFakeTransportAddress(), version);
 
+        // Create IndexMetadata with all fields set
+        String indexName = "test-index";
+        IndexMetadata.Builder indexBuilder = IndexMetadata.builder(indexName)
+            .settings(Settings.builder()
+                .put(IndexMetadata.SETTING_VERSION_CREATED, version)
+                .put(IndexMetadata.SETTING_NUMBER_OF_SHARDS, 1)
+                .put(IndexMetadata.SETTING_NUMBER_OF_REPLICAS, 1)
+                .put(IndexMetadata.SETTING_CREATION_DATE, System.currentTimeMillis())
+                .put(IndexMetadata.SETTING_INDEX_UUID, "test-uuid")
+                .put(IndexMetadata.SETTING_PRIORITY, 100)
+                .put(IndexMetadata.INDEX_ROUTING_PARTITION_SIZE_SETTING.getKey(), 1)
+                .put(IndexMetadata.SETTING_AUTO_EXPAND_REPLICAS, "0-1")
+                .put(IndexMetadata.SETTING_REPLICATION_TYPE, "DOCUMENT")
+                .build())
+            .numberOfShards(1)
+            .numberOfReplicas(1)
+            .creationDate(System.currentTimeMillis())
+            .version(1)
+            .mappingVersion(1)
+            .settingsVersion(1)
+            .aliasesVersion(1)
+            .state(IndexMetadata.State.OPEN);
+
+        // Add mapping
+        Map<String, Object> mappingSource = new HashMap<>();
+        mappingSource.put("properties", Map.of("field1", Map.of("type", "text")));
+        indexBuilder.putMapping(new MappingMetadata("_doc", mappingSource));
+
+        // Add alias
+        indexBuilder.putAlias(AliasMetadata.builder("test-alias").build());
+
+        // Add custom data
+        indexBuilder.putCustom("test-custom", Map.of("key1", "value1"));
+
+        // Add in-sync allocation IDs
+        indexBuilder.putInSyncAllocationIds(0, Set.of("alloc-1", "alloc-2"));
+
+        // Add rollover info
+        indexBuilder.putRolloverInfo(new RolloverInfo("test-alias", Collections.emptyList(), 1000L));
+        indexBuilder.ingestionStatus(new IngestionStatus(true));
+        IndexMetadata indexMetadata = indexBuilder.build();
+
+
         final ClusterState localClusterState = ClusterState.builder(ClusterName.DEFAULT)
-            .metadata(Metadata.builder().generateClusterUuidIfNeeded().clusterUUIDCommitted(true))
+            .metadata(Metadata.builder()
+                .clusterUUID("test-cluster-uuid")
+                .clusterUUIDCommitted(true)
+                .indices(Map.of(indexName, indexMetadata))
+                .templates(Map.of(indexName, IndexTemplateMetadata.builder(indexName).patterns(List.of("pattern")).build()))
+            )
             .build();
         TransportService transportService;
         if (isCapturingTransport) {
@@ -500,15 +593,19 @@ public class JoinHelperTests extends OpenSearchTestCase {
             (joinRequest, joinCallback) -> {
                 throw new AssertionError();
             },
-            startJoinRequest -> { throw new AssertionError(); },
+            startJoinRequest -> {
+                throw new AssertionError();
+            },
             Collections.emptyList(),
-            (s, p, r) -> {},
+            (s, p, r) -> {
+            },
             null,
-            nodeCommissioned -> {},
+            nodeCommissioned -> {
+            },
             namedWriteableRegistry
         ); // registers
-           // request
-           // handler
+        // request
+        // handler
         transportService.start();
         transportService.acceptIncomingRequests();
         return new TestClusterSetup(deterministicTaskQueue, localNode, transportService, localClusterState, joinHelper, capturingTransport);
@@ -549,5 +646,73 @@ public class JoinHelperTests extends OpenSearchTestCase {
             this.joinHelper = joinHelper;
             this.capturingTransport = capturingTransport;
         }
+    }
+
+
+    public void testCompressedValidateJoinRequestForDifferentNodeVersions() throws Exception {
+        TestClusterSetup testCluster = getTestClusterSetup(Version.CURRENT, true); // Use capturing transport
+
+        ClusterState clusterState = testCluster.localClusterState;
+
+        // Test with 2.19 node
+        DiscoveryNode node219 = new DiscoveryNode("node219", buildNewFakeTransportAddress(), Version.V_2_19_0);
+        testCluster.joinHelper.sendValidateJoinRequest(node219, clusterState, new ActionListener<>() {
+            @Override
+            public void onResponse(TransportResponse.Empty empty) {
+                logger.info("validation successful for 2.19 node");
+            }
+            @Override
+            public void onFailure(Exception e) {
+                logger.error("validation failed for 2.19 node", e);
+            }
+        });
+
+        // Test with 3.1 node
+        DiscoveryNode node31 = new DiscoveryNode("node31", buildNewFakeTransportAddress(), Version.V_3_1_0);
+        testCluster.joinHelper.sendValidateJoinRequest(node31, clusterState, new ActionListener<>() {
+            @Override
+            public void onResponse(TransportResponse.Empty empty) {
+                logger.info("validation successful for 3.1 node");
+            }
+            @Override
+            public void onFailure(Exception e) {
+                logger.error("validation failed for 3.1 node", e);
+            }
+        });
+
+        // Verify both requests were sent with VALIDATE_COMPRESSED_JOIN_ACTION_NAME
+        CapturedRequest[] requests = testCluster.capturingTransport.getCapturedRequestsAndClear();
+        assertEquals(2, requests.length);
+
+        // Both requests should use compressed action since both versions >= 2.9.0
+        assertEquals(VALIDATE_COMPRESSED_JOIN_ACTION_NAME, requests[0].action);
+        assertEquals(VALIDATE_COMPRESSED_JOIN_ACTION_NAME, requests[1].action);
+        assertEquals(node219, requests[0].node);
+        assertEquals(node31, requests[1].node);
+
+        // Verify requests are BytesTransportRequest (used by handleCompressedValidateJoinRequest)
+        assertTrue(requests[0].request instanceof BytesTransportRequest);
+        assertTrue(requests[1].request instanceof BytesTransportRequest);
+
+        // Test decompression on both 2.19 and 3.1 node JoinHelpers
+        BytesTransportRequest request219 = (BytesTransportRequest) requests[0].request;
+        BytesTransportRequest request31 = (BytesTransportRequest) requests[1].request;
+
+        // Create JoinHelper for 2.19 node to test deserialization with same cluster UUID
+        TestClusterSetup testCluster219 = getTestClusterSetup(Version.V_2_19_0, false);
+        testCluster219.joinHelper.handleCompressedValidateJoinRequest(
+            () -> clusterState,
+            Collections.emptyList(),
+            request219
+        );
+        logger.info("Decompression test passed for 2.19 node");
+
+        // Test on 3.1 node JoinHelper with same cluster UUID
+        testCluster.joinHelper.handleCompressedValidateJoinRequest(
+            () -> clusterState,
+            Collections.emptyList(),
+            request31
+        );
+        logger.info("Decompression test passed for 3.1 node");
     }
 }

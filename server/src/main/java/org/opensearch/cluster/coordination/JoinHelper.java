@@ -263,13 +263,14 @@ public class JoinHelper {
         joinValidators.forEach(action -> action.accept(transportService.getLocalNode(), incomingState));
     }
 
-    private void handleCompressedValidateJoinRequest(
+    public void handleCompressedValidateJoinRequest(
         Supplier<ClusterState> currentStateSupplier,
         Collection<BiConsumer<DiscoveryNode, ClusterState>> joinValidators,
         BytesTransportRequest request
     ) throws IOException {
         try (StreamInput input = CompressedStreamUtils.decompressBytes(request, namedWriteableRegistry)) {
             ClusterState incomingState = ClusterState.readFrom(input, transportService.getLocalNode());
+            logger.info("Incoming cluster state {}", incomingState);
             runJoinValidators(currentStateSupplier, incomingState, joinValidators);
         }
     }
@@ -455,6 +456,7 @@ public class JoinHelper {
     }
 
     public void sendValidateJoinRequest(DiscoveryNode node, ClusterState state, ActionListener<TransportResponse.Empty> listener) {
+        logger.info("sending join request to [{}]", node);
         if (node.getVersion().before(Version.V_2_9_0)) {
             transportService.sendRequest(
                 node,
@@ -466,6 +468,7 @@ public class JoinHelper {
             try {
                 final BytesReference bytes = serializedState.updateAndGet(cachedState -> {
                     if (cachedState == null || cachedState.v1() != state.version()) {
+                        logger.info("Cluster state not cached with version {}", state.version());
                         try {
                             return new Tuple<>(
                                 state.version(),
@@ -476,6 +479,7 @@ public class JoinHelper {
                             throw new RuntimeException(e);
                         }
                     } else {
+                        logger.info("Cluster state cached with version {}", state.version());
                         return cachedState;
                     }
                 }).v2();
