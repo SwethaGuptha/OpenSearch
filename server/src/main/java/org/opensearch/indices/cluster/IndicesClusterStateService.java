@@ -44,11 +44,8 @@ import org.opensearch.cluster.action.shard.ShardStateAction;
 import org.opensearch.cluster.metadata.IndexMetadata;
 import org.opensearch.cluster.node.DiscoveryNode;
 import org.opensearch.cluster.node.DiscoveryNodes;
-import org.opensearch.cluster.routing.IndexShardRoutingTable;
+import org.opensearch.cluster.routing.*;
 import org.opensearch.cluster.routing.RecoverySource.Type;
-import org.opensearch.cluster.routing.RoutingNode;
-import org.opensearch.cluster.routing.RoutingTable;
-import org.opensearch.cluster.routing.ShardRouting;
 import org.opensearch.cluster.service.ClusterService;
 import org.opensearch.common.Nullable;
 import org.opensearch.common.annotation.PublicApi;
@@ -111,6 +108,7 @@ import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
 import static org.opensearch.cluster.metadata.IndexMetadata.SETTING_REMOTE_STORE_ENABLED;
+import static org.opensearch.cluster.routing.allocation.ShardAllocationMetadataUpdater.INDEX_ROUTING_SHARD_ALLOCATION_METADATA_ENABLED;
 import static org.opensearch.indices.cluster.IndicesClusterStateService.AllocatedIndices.IndexRemovalReason.CLOSED;
 import static org.opensearch.indices.cluster.IndicesClusterStateService.AllocatedIndices.IndexRemovalReason.DELETED;
 import static org.opensearch.indices.cluster.IndicesClusterStateService.AllocatedIndices.IndexRemovalReason.FAILURE;
@@ -687,10 +685,16 @@ public class IndicesClusterStateService extends AbstractLifecycleComponent imple
         }
 
         try {
-            final long primaryTerm = state.metadata().index(shardRouting.index()).primaryTerm(shardRouting.id());
+            boolean shardAllocationRouting = INDEX_ROUTING_SHARD_ALLOCATION_METADATA_ENABLED.get(clusterService.getSettings());
+            IndexRoutingTable indexRoutingTable = state.routingTable().index(shardRouting.index());
+            IndexMetadata indexMetadata = state.metadata().index(shardRouting.index());
+            final long primaryTerm = shardAllocationRouting ? indexRoutingTable.getPrimaryTerm(shardRouting.id()) : indexMetadata.primaryTerm(shardRouting.id());
+            final Set<String> inSyncIds = shardAllocationRouting ? indexRoutingTable.getInSyncAllocationIds(shardRouting.id()) : indexMetadata.inSyncAllocationIds(shardRouting.id());
             logger.debug("{} creating shard with primary term [{}]", shardRouting.shardId(), primaryTerm);
             indicesService.createShard(
                 shardRouting,
+                primaryTerm,
+                inSyncIds,
                 checkpointPublisher,
                 recoveryTargetService,
                 new RecoveryListener(shardRouting, primaryTerm, this),
@@ -727,10 +731,18 @@ public class IndicesClusterStateService extends AbstractLifecycleComponent imple
                 + currentRoutingEntry;
 
         final long primaryTerm;
+        final Set<String> inSyncIds;
         try {
             final IndexMetadata indexMetadata = clusterState.metadata().index(shard.shardId().getIndex());
-            primaryTerm = indexMetadata.primaryTerm(shard.shardId().id());
-            final Set<String> inSyncIds = indexMetadata.inSyncAllocationIds(shard.shardId().id());
+            boolean shardAllocationRouting = INDEX_ROUTING_SHARD_ALLOCATION_METADATA_ENABLED.get(clusterService.getSettings());
+            IndexRoutingTable indexRoutingTable = clusterState.routingTable().index(shard.shardId().getIndex());
+            if (shardAllocationRouting) {
+                primaryTerm = indexRoutingTable.getPrimaryTerm(shard.shardId().id());
+                inSyncIds = indexRoutingTable.getInSyncAllocationIds(shard.shardId().id());
+            } else {
+                primaryTerm = indexMetadata.primaryTerm(shard.shardId().id());
+                inSyncIds = indexMetadata.inSyncAllocationIds(shard.shardId().id());
+            }
             final IndexShardRoutingTable indexShardRoutingTable = routingTable.shardRoutingTable(shardRouting.shardId());
             shard.updateShardState(
                 shardRouting,
@@ -1078,6 +1090,27 @@ public class IndicesClusterStateService extends AbstractLifecycleComponent imple
          */
         T createShard(
             ShardRouting shardRouting,
+            SegmentReplicationCheckpointPublisher checkpointPublisher,
+            PeerRecoveryTargetService recoveryTargetService,
+            RecoveryListener recoveryListener,
+            RepositoriesService repositoriesService,
+            Consumer<IndexShard.ShardFailure> onShardFailure,
+            Consumer<ShardId> globalCheckpointSyncer,
+            RetentionLeaseSyncer retentionLeaseSyncer,
+            DiscoveryNode targetNode,
+            @Nullable DiscoveryNode sourceNode,
+            RemoteStoreStatsTrackerFactory remoteStoreStatsTrackerFactory,
+            DiscoveryNodes discoveryNodes,
+            MergedSegmentWarmerFactory mergedSegmentWarmerFactory,
+            MergedSegmentPublisher mergedSegmentPublisher,
+            ReferencedSegmentsPublisher referencedSegmentsPublisher
+        ) throws IOException;
+
+
+        T createShard(
+            ShardRouting shardRouting,
+            Long primaryTerm,
+            Set<String> inSyncAllocationIds,
             SegmentReplicationCheckpointPublisher checkpointPublisher,
             PeerRecoveryTargetService recoveryTargetService,
             RecoveryListener recoveryListener,

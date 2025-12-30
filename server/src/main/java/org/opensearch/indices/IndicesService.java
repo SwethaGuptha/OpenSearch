@@ -1303,13 +1303,57 @@ public class IndicesService extends AbstractLifecycleComponent
         final MergedSegmentPublisher mergedSegmentPublisher,
         final ReferencedSegmentsPublisher referencedSegmentsPublisher
     ) throws IOException {
+        return createShard(
+            shardRouting,
+            null,
+            null,
+            checkpointPublisher,
+            recoveryTargetService,
+            recoveryListener,
+            repositoriesService,
+            onShardFailure,
+            globalCheckpointSyncer,
+            retentionLeaseSyncer,
+            targetNode,
+            sourceNode,
+            remoteStoreStatsTrackerFactory,
+            discoveryNodes,
+            mergedSegmentWarmerFactory,
+            mergedSegmentPublisher,
+            referencedSegmentsPublisher
+        );
+    }
+
+    @Override
+    public IndexShard createShard(
+        final ShardRouting shardRouting,
+        final Long primaryTerm,
+        final Set<String> inSyncAllocationIds,
+        final SegmentReplicationCheckpointPublisher checkpointPublisher,
+        final PeerRecoveryTargetService recoveryTargetService,
+        final RecoveryListener recoveryListener,
+        final RepositoriesService repositoriesService,
+        final Consumer<IndexShard.ShardFailure> onShardFailure,
+        final Consumer<ShardId> globalCheckpointSyncer,
+        final RetentionLeaseSyncer retentionLeaseSyncer,
+        final DiscoveryNode targetNode,
+        final DiscoveryNode sourceNode,
+        final RemoteStoreStatsTrackerFactory remoteStoreStatsTrackerFactory,
+        final DiscoveryNodes discoveryNodes,
+        final MergedSegmentWarmerFactory mergedSegmentWarmerFactory,
+        final MergedSegmentPublisher mergedSegmentPublisher,
+        final ReferencedSegmentsPublisher referencedSegmentsPublisher
+    ) throws IOException {
         Objects.requireNonNull(retentionLeaseSyncer);
         ensureChangesAllowed();
         IndexService indexService = indexService(shardRouting.index());
         assert indexService != null;
         RecoveryState recoveryState = indexService.createRecoveryState(shardRouting, targetNode, sourceNode);
+        IndexMetadata indexMetadata = indexService.getIndexSettings().getIndexMetadata();
         IndexShard indexShard = indexService.createShard(
             shardRouting,
+            primaryTerm == null ? indexMetadata.primaryTerm(shardRouting.id()) : primaryTerm,
+            inSyncAllocationIds == null ? indexMetadata.inSyncAllocationIds(shardRouting.id()) : inSyncAllocationIds,
             globalCheckpointSyncer,
             retentionLeaseSyncer,
             checkpointPublisher,

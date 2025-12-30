@@ -19,6 +19,7 @@ import org.opensearch.cluster.routing.allocation.NodeAllocationResult;
 import org.opensearch.cluster.routing.allocation.RoutingAllocation;
 import org.opensearch.cluster.routing.allocation.decider.Decision;
 import org.opensearch.common.collect.Tuple;
+import org.opensearch.common.settings.Settings;
 import org.opensearch.core.index.shard.ShardId;
 import org.opensearch.gateway.AsyncShardFetch.FetchResult;
 import org.opensearch.indices.store.TransportNodesListShardStoreMetadata;
@@ -41,6 +42,10 @@ import java.util.function.Supplier;
  * @opensearch.internal
  */
 public abstract class ReplicaShardBatchAllocator extends ReplicaShardAllocator {
+
+    public ReplicaShardBatchAllocator(Settings settings) {
+        super(settings);
+    }
 
     /**
      * Process existing recoveries of replicas and see if we need to cancel them if we find a better

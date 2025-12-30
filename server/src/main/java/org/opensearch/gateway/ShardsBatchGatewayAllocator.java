@@ -196,8 +196,8 @@ public class ShardsBatchGatewayAllocator implements ExistingShardsAllocator {
         ClusterManagerMetrics clusterManagerMetrics
     ) {
         this.rerouteService = rerouteService;
-        this.primaryShardBatchAllocator = new InternalPrimaryBatchShardAllocator();
-        this.replicaShardBatchAllocator = new InternalReplicaBatchShardAllocator();
+        this.primaryShardBatchAllocator = new InternalPrimaryBatchShardAllocator(settings);
+        this.replicaShardBatchAllocator = new InternalReplicaBatchShardAllocator(settings);
         this.batchStartedAction = batchStartedAction;
         this.batchStoreAction = batchStoreAction;
         this.maxBatchSize = GATEWAY_ALLOCATOR_BATCH_SIZE.get(settings);
@@ -660,6 +660,10 @@ public class ShardsBatchGatewayAllocator implements ExistingShardsAllocator {
 
     class InternalPrimaryBatchShardAllocator extends PrimaryShardBatchAllocator {
 
+        InternalPrimaryBatchShardAllocator(Settings settings) {
+            super(settings);
+        }
+
         @Override
         @SuppressWarnings("unchecked")
         protected AsyncShardFetch.FetchResult<TransportNodesListGatewayStartedShardsBatch.NodeGatewayStartedShardsBatch> fetchData(
@@ -678,6 +682,11 @@ public class ShardsBatchGatewayAllocator implements ExistingShardsAllocator {
     }
 
     class InternalReplicaBatchShardAllocator extends ReplicaShardBatchAllocator {
+
+        InternalReplicaBatchShardAllocator(Settings settings) {
+            super(settings);
+        }
+
         @Override
         @SuppressWarnings("unchecked")
         protected AsyncShardFetch.FetchResult<TransportNodesListShardStoreMetadataBatch.NodeStoreFilesMetadataBatch> fetchData(

@@ -140,6 +140,7 @@ import java.util.function.Supplier;
 
 import static java.util.Collections.emptyMap;
 import static java.util.Collections.unmodifiableMap;
+import static org.opensearch.cluster.routing.allocation.ShardAllocationMetadataUpdater.INDEX_ROUTING_SHARD_ALLOCATION_METADATA_ENABLED;
 import static org.opensearch.common.collect.MapBuilder.newMapBuilder;
 import static org.opensearch.index.remote.RemoteMigrationIndexMetadataUpdater.indexHasRemoteStoreSettings;
 
@@ -663,6 +664,38 @@ public class IndexService extends AbstractIndexComponent implements IndicesClust
         MergedSegmentPublisher mergedSegmentPublisher,
         ReferencedSegmentsPublisher referencedSegmentsPublisher
     ) throws IOException {
+        return createShard(routing,
+            this.indexSettings.getIndexMetadata().primaryTerm(routing.id()),
+            this.indexSettings.getIndexMetadata().inSyncAllocationIds(routing.id()),
+            globalCheckpointSyncer,
+            retentionLeaseSyncer,
+            checkpointPublisher,
+            remoteStoreStatsTrackerFactory,
+            repositoriesService,
+            targetNode,
+            sourceNode,
+            discoveryNodes,
+            mergedSegmentWarmerFactory,
+            mergedSegmentPublisher,
+            referencedSegmentsPublisher);
+    }
+
+    public synchronized IndexShard createShard(
+        final ShardRouting routing,
+        final long primaryTerm,
+        final Set<String> inSyncAllocationIds,
+        final Consumer<ShardId> globalCheckpointSyncer,
+        final RetentionLeaseSyncer retentionLeaseSyncer,
+        final SegmentReplicationCheckpointPublisher checkpointPublisher,
+        final RemoteStoreStatsTrackerFactory remoteStoreStatsTrackerFactory,
+        final RepositoriesService repositoriesService,
+        final DiscoveryNode targetNode,
+        @Nullable DiscoveryNode sourceNode,
+        DiscoveryNodes discoveryNodes,
+        MergedSegmentWarmerFactory mergedSegmentWarmerFactory,
+        MergedSegmentPublisher mergedSegmentPublisher,
+        ReferencedSegmentsPublisher referencedSegmentsPublisher
+    ) throws IOException {
         Objects.requireNonNull(retentionLeaseSyncer);
         /*
          * TODO: we execute this in parallel but it's a synced method. Yet, we might
@@ -777,6 +810,8 @@ public class IndexService extends AbstractIndexComponent implements IndicesClust
             eventListener.onStoreCreated(shardId);
             indexShard = new IndexShard(
                 routing,
+                primaryTerm,
+                inSyncAllocationIds,
                 this.indexSettings,
                 path,
                 store,

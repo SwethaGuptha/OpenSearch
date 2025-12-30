@@ -48,6 +48,7 @@ import org.opensearch.cluster.NotClusterManagerException;
 import org.opensearch.cluster.coordination.FailedToCommitClusterStateException;
 import org.opensearch.cluster.metadata.IndexMetadata;
 import org.opensearch.cluster.node.DiscoveryNode;
+import org.opensearch.cluster.routing.IndexRoutingTable;
 import org.opensearch.cluster.routing.RerouteService;
 import org.opensearch.cluster.routing.ShardRouting;
 import org.opensearch.cluster.routing.allocation.AllocationService;
@@ -78,12 +79,7 @@ import org.opensearch.transport.TransportRequestHandler;
 import org.opensearch.transport.TransportService;
 
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Locale;
-import java.util.Objects;
-import java.util.Set;
+import java.util.*;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 
@@ -452,8 +448,22 @@ public class ShardStateAction {
             List<StaleShard> staleShardsToBeApplied = new ArrayList<>();
 
             for (FailedShardEntry task : tasks) {
-                IndexMetadata indexMetadata = currentState.metadata().index(task.shardId.getIndex());
-                if (indexMetadata == null) {
+                Long primaryTerm = null;
+                Set<String> inSyncAllocationIds = null;
+                if (allocationService.isIndexRoutingTableShardAllocationMetadataEnabled()) {
+                    IndexRoutingTable indexRoutingTable = currentState.routingTable().index(task.shardId.getIndex());
+                    if (indexRoutingTable != null) {
+                        primaryTerm = indexRoutingTable.getPrimaryTerm(task.shardId.id());
+                        inSyncAllocationIds = indexRoutingTable.getInSyncAllocationIds().get(task.shardId.id());
+                    }
+                } else {
+                    IndexMetadata indexMetadata = currentState.metadata().index(task.shardId.getIndex());
+                    if (indexMetadata != null) {
+                        primaryTerm = indexMetadata.primaryTerm(task.shardId.id());
+                        inSyncAllocationIds = indexMetadata.getInSyncAllocationIds().get(task.shardId.id());
+                    }
+                }
+                if (primaryTerm == null) {
                     // tasks that correspond to non-existent indices are marked as successful
                     logger.debug("{} ignoring shard failed task [{}] (unknown index {})", task.shardId, task, task.shardId.getIndex());
                     batchResultBuilder.success(task);
@@ -467,7 +477,7 @@ public class ShardStateAction {
                     // This prevents situations where a new primary has already been selected and replication failures from an old stale
                     // primary unnecessarily fail currently active shards.
                     if (task.primaryTerm > 0) {
-                        long currentPrimaryTerm = indexMetadata.primaryTerm(task.shardId.id());
+                        long currentPrimaryTerm = primaryTerm;
                         if (currentPrimaryTerm != task.primaryTerm) {
                             assert currentPrimaryTerm > task.primaryTerm : "received a primary term with a higher term than in the "
                                 + "current cluster state (received ["
@@ -480,7 +490,7 @@ public class ShardStateAction {
                                 task.shardId,
                                 task,
                                 task.primaryTerm,
-                                indexMetadata.primaryTerm(task.shardId.id())
+                                currentPrimaryTerm
                             );
                             batchResultBuilder.failure(
                                 task,
@@ -499,7 +509,6 @@ public class ShardStateAction {
 
                     ShardRouting matched = currentState.getRoutingTable().getByAllocationId(task.shardId, task.allocationId);
                     if (matched == null) {
-                        Set<String> inSyncAllocationIds = indexMetadata.inSyncAllocationIds(task.shardId.id());
                         // mark shard copies without routing entries that are in in-sync allocations set only as stale if the reason why
                         // they were failed is because a write made it into the primary but not to this copy (which corresponds to
                         // the check "primaryTerm > 0").

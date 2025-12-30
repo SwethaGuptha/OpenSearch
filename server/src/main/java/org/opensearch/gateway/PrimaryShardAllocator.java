@@ -36,11 +36,7 @@ import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.message.ParameterizedMessage;
 import org.opensearch.cluster.metadata.IndexMetadata;
 import org.opensearch.cluster.node.DiscoveryNode;
-import org.opensearch.cluster.routing.RecoverySource;
-import org.opensearch.cluster.routing.RoutingNode;
-import org.opensearch.cluster.routing.RoutingNodes;
-import org.opensearch.cluster.routing.ShardRouting;
-import org.opensearch.cluster.routing.UnassignedInfo;
+import org.opensearch.cluster.routing.*;
 import org.opensearch.cluster.routing.UnassignedInfo.AllocationStatus;
 import org.opensearch.cluster.routing.allocation.AllocateUnassignedDecision;
 import org.opensearch.cluster.routing.allocation.NodeAllocationResult;
@@ -48,6 +44,7 @@ import org.opensearch.cluster.routing.allocation.NodeAllocationResult.ShardStore
 import org.opensearch.cluster.routing.allocation.RoutingAllocation;
 import org.opensearch.cluster.routing.allocation.decider.Decision;
 import org.opensearch.cluster.routing.allocation.decider.Decision.Type;
+import org.opensearch.common.settings.Settings;
 import org.opensearch.env.ShardLockObtainFailedException;
 import org.opensearch.gateway.AsyncShardFetch.FetchResult;
 import org.opensearch.gateway.TransportNodesGatewayStartedShardHelper.NodeGatewayStartedShard;
@@ -62,6 +59,8 @@ import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
+
+import static org.opensearch.cluster.routing.allocation.ShardAllocationMetadataUpdater.INDEX_ROUTING_SHARD_ALLOCATION_METADATA_ENABLED;
 
 /**
  * The primary shard allocator allocates unassigned primary shards to nodes that hold
@@ -79,6 +78,11 @@ import java.util.stream.Stream;
  * @opensearch.internal
  */
 public abstract class PrimaryShardAllocator extends BaseGatewayShardAllocator {
+
+    public PrimaryShardAllocator(Settings settings) {
+        super(settings);
+    }
+
     /**
      * Is the allocator responsible for allocating the given {@link ShardRouting}?
      */
@@ -170,8 +174,15 @@ public abstract class PrimaryShardAllocator extends BaseGatewayShardAllocator {
         }
         // don't create a new IndexSetting object for every shard as this could cause a lot of garbage
         // on cluster restart if we allocate a boat load of shards
-        final IndexMetadata indexMetadata = allocation.metadata().getIndexSafe(unassignedShard.index());
-        final Set<String> inSyncAllocationIds = indexMetadata.inSyncAllocationIds(unassignedShard.id());
+        Boolean indexRoutingShardAllocationMetadataEnabled = INDEX_ROUTING_SHARD_ALLOCATION_METADATA_ENABLED.get(this.settings);
+        final Set<String> inSyncAllocationIds;
+        if (indexRoutingShardAllocationMetadataEnabled) {
+            IndexRoutingTable indexRoutingTable = allocation.routingTable().index(unassignedShard.index());
+            inSyncAllocationIds = indexRoutingTable.getInSyncAllocationIds(unassignedShard.id());
+        } else {
+            final IndexMetadata indexMetadata = allocation.metadata().getIndexSafe(unassignedShard.index());
+            inSyncAllocationIds = indexMetadata.inSyncAllocationIds(unassignedShard.id());
+        }
         final boolean snapshotRestore = unassignedShard.recoverySource().getType() == RecoverySource.Type.SNAPSHOT;
 
         assert inSyncAllocationIds.isEmpty() == false;

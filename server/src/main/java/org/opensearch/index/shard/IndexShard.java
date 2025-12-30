@@ -307,6 +307,7 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
     // ensure happens-before relation between addRefreshListener() and postRecovery()
     private final Object postRecoveryMutex = new Object();
     private volatile long pendingPrimaryTerm; // see JavaDocs for getPendingPrimaryTerm
+    private volatile Set<String> inSyncAllocationIds;
     private final Object engineMutex = new Object(); // lock ordering: engineMutex -> mutex
     private final AtomicReference<Engine> currentEngineReference = new AtomicReference<>();
     final EngineFactory engineFactory;
@@ -435,6 +436,93 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
         @Nullable final MergedSegmentPublisher mergedSegmentPublisher,
         @Nullable final ReferencedSegmentsPublisher referencedSegmentsPublisher
     ) throws IOException {
+        this(
+            shardRouting,
+            indexSettings.getIndexMetadata().primaryTerm(shardRouting.shardId().id()),
+            indexSettings.getIndexMetadata().inSyncAllocationIds(shardRouting.shardId().id()),
+            indexSettings,
+            path,
+            store,
+            indexSortSupplier,
+            indexCache,
+            mapperService,
+            similarityService,
+            engineFactory,
+            engineConfigFactory,
+            indexEventListener,
+            indexReaderWrapper,
+            threadPool,
+            bigArrays,
+            warmer,
+            searchOperationListener,
+            listeners,
+            globalCheckpointSyncer,
+            retentionLeaseSyncer,
+            circuitBreakerService,
+            translogFactorySupplier,
+            checkpointPublisher,
+            remoteStore,
+            remoteStoreStatsTrackerFactory,
+            nodeId,
+            recoverySettings,
+            remoteStoreSettings,
+            seedRemote,
+            discoveryNodes,
+            segmentReplicationStatsProvider,
+            mergedSegmentWarmerFactory,
+            shardLevelRefreshEnabled,
+            fixedRefreshIntervalSchedulingEnabled,
+            refreshInterval,
+            refreshMutex,
+            clusterApplierService,
+            mergedSegmentPublisher,
+            referencedSegmentsPublisher
+        );
+    }
+
+    @InternalApi
+    public IndexShard(
+        final ShardRouting shardRouting,
+        final long primaryTerm,
+        final Set<String> inSyncAllocationIds,
+        final IndexSettings indexSettings,
+        final ShardPath path,
+        final Store store,
+        final Supplier<Sort> indexSortSupplier,
+        final IndexCache indexCache,
+        final MapperService mapperService,
+        final SimilarityService similarityService,
+        final EngineFactory engineFactory,
+        final EngineConfigFactory engineConfigFactory,
+        final IndexEventListener indexEventListener,
+        final CheckedFunction<DirectoryReader, DirectoryReader, IOException> indexReaderWrapper,
+        final ThreadPool threadPool,
+        final BigArrays bigArrays,
+        final Engine.Warmer warmer,
+        final List<SearchOperationListener> searchOperationListener,
+        final List<IndexingOperationListener> listeners,
+        final Runnable globalCheckpointSyncer,
+        final RetentionLeaseSyncer retentionLeaseSyncer,
+        final CircuitBreakerService circuitBreakerService,
+        final BiFunction<IndexSettings, ShardRouting, TranslogFactory> translogFactorySupplier,
+        @Nullable final SegmentReplicationCheckpointPublisher checkpointPublisher,
+        @Nullable final Store remoteStore,
+        final RemoteStoreStatsTrackerFactory remoteStoreStatsTrackerFactory,
+        final String nodeId,
+        final RecoverySettings recoverySettings,
+        final RemoteStoreSettings remoteStoreSettings,
+        boolean seedRemote,
+        final DiscoveryNodes discoveryNodes,
+        final Function<ShardId, ReplicationStats> segmentReplicationStatsProvider,
+        final MergedSegmentWarmerFactory mergedSegmentWarmerFactory,
+        final boolean shardLevelRefreshEnabled,
+        final Supplier<Boolean> fixedRefreshIntervalSchedulingEnabled,
+        final Supplier<TimeValue> refreshInterval,
+        final Object refreshMutex,
+        final ClusterApplierService clusterApplierService,
+        @Nullable final MergedSegmentPublisher mergedSegmentPublisher,
+        @Nullable final ReferencedSegmentsPublisher referencedSegmentsPublisher
+    ) throws IOException {
         super(shardRouting.shardId(), indexSettings);
         assert shardRouting.initializing();
         this.shardRouting = shardRouting;
@@ -482,8 +570,9 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
         this.checkIndexOnStartup = indexSettings.getValue(IndexSettings.INDEX_CHECK_ON_STARTUP);
         this.translogConfig = new TranslogConfig(shardId, shardPath().resolveTranslog(), indexSettings, bigArrays, nodeId, seedRemote);
         final String aId = shardRouting.allocationId().getId();
-        final long primaryTerm = indexSettings.getIndexMetadata().primaryTerm(shardId.id());
+        // TODO: set primary term explicitly in IndexSettings
         this.pendingPrimaryTerm = primaryTerm;
+        this.inSyncAllocationIds = inSyncAllocationIds;
         this.globalCheckpointListeners = new GlobalCheckpointListeners(shardId, threadPool.scheduler(), logger);
         this.pendingReplicationActions = new PendingReplicationActions(shardId, threadPool);
         this.replicationTracker = new ReplicationTracker(
@@ -671,6 +760,10 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
      */
     public long getPendingPrimaryTerm() {
         return this.pendingPrimaryTerm;
+    }
+
+    public Set<String> getInSyncAllocationIds() {
+        return this.inSyncAllocationIds;
     }
 
     /** Returns the primary term that is currently being used to assign to operations */

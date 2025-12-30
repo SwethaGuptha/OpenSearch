@@ -14,6 +14,7 @@ import org.opensearch.cluster.routing.RerouteService;
 import org.opensearch.cluster.routing.ShardRouting;
 import org.opensearch.cluster.routing.allocation.AllocateUnassignedDecision;
 import org.opensearch.cluster.routing.allocation.RoutingAllocation;
+import org.opensearch.common.settings.Settings;
 import org.opensearch.common.util.BatchRunnableExecutor;
 import org.opensearch.core.index.shard.ShardId;
 import org.opensearch.gateway.AsyncShardFetch;
@@ -53,7 +54,7 @@ public class TestShardBatchGatewayAllocator extends ShardsBatchGatewayAllocator 
     DiscoveryNodes currentNodes = DiscoveryNodes.EMPTY_NODES;
     Map<String, ReplicationCheckpoint> shardIdNodeToReplicationCheckPointMap = new HashMap<>();
 
-    PrimaryShardBatchAllocator primaryBatchShardAllocator = new PrimaryShardBatchAllocator() {
+    PrimaryShardBatchAllocator primaryBatchShardAllocator = new PrimaryShardBatchAllocator(Settings.EMPTY) {
         @Override
         protected AsyncShardFetch.FetchResult<TransportNodesListGatewayStartedShardsBatch.NodeGatewayStartedShardsBatch> fetchData(
             List<ShardRouting> eligibleShards,
@@ -101,7 +102,7 @@ public class TestShardBatchGatewayAllocator extends ShardsBatchGatewayAllocator 
         }
     };
 
-    ReplicaShardBatchAllocator replicaBatchShardAllocator = new ReplicaShardBatchAllocator() {
+    ReplicaShardBatchAllocator replicaBatchShardAllocator = new ReplicaShardBatchAllocator(Settings.EMPTY) {
 
         @Override
         protected AsyncShardFetch.FetchResult<TransportNodesListShardStoreMetadataBatch.NodeStoreFilesMetadataBatch> fetchData(

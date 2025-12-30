@@ -54,7 +54,7 @@ import java.util.stream.Collectors;
 import org.mockito.Mockito;
 
 import static org.opensearch.cluster.metadata.IndexMetadata.REMOTE_STORE_CUSTOM_KEY;
-import static org.opensearch.index.remote.RemoteMigrationIndexMetadataUpdaterTests.createIndexMetadataWithDocrepSettings;
+import static org.opensearch.index.remote.RemoteMigrationShardAllocationMetadataUpdaterTests.createIndexMetadataWithDocrepSettings;
 import static org.opensearch.index.remote.RemoteStoreUtils.URL_BASE64_CHARSET;
 import static org.opensearch.index.remote.RemoteStoreUtils.determineTranslogMetadataEnabled;
 import static org.opensearch.index.remote.RemoteStoreUtils.finalizeMigration;

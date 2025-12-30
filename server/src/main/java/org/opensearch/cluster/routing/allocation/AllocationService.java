@@ -83,6 +83,7 @@ import static java.util.Collections.emptyList;
 import static java.util.Collections.singletonList;
 import static org.opensearch.cluster.routing.UnassignedInfo.INDEX_DELAYED_NODE_LEFT_TIMEOUT_SETTING;
 import static org.opensearch.cluster.routing.allocation.ExistingShardsAllocator.EXISTING_SHARDS_ALLOCATOR_BATCH_MODE;
+import static org.opensearch.cluster.routing.allocation.ShardAllocationMetadataUpdater.INDEX_ROUTING_SHARD_ALLOCATION_METADATA_ENABLED;
 
 /**
  * This service manages the node allocation of a cluster. For this reason the
@@ -209,9 +210,9 @@ public class AllocationService {
 
     private ClusterState buildResult(ClusterState oldState, RoutingAllocation allocation) {
         final RoutingTable oldRoutingTable = oldState.routingTable();
-        final RoutingNodes newRoutingNodes = allocation.routingNodes();
-        final RoutingTable newRoutingTable = new RoutingTable.Builder().updateNodes(oldRoutingTable.version(), newRoutingNodes).build();
-        final Metadata newMetadata = allocation.updateMetadataWithRoutingChanges(newRoutingTable);
+        boolean updateShardAllocationInRoutingTable = isIndexRoutingTableShardAllocationMetadataEnabled();
+        final RoutingTable newRoutingTable = allocation.updateRoutingTableWithRoutingAllocationChanges(oldRoutingTable, updateShardAllocationInRoutingTable);
+        final Metadata newMetadata = allocation.updateMetadataWithRoutingChanges(newRoutingTable, !updateShardAllocationInRoutingTable);
         assert newRoutingTable.validate(newMetadata); // validates the routing table is coherent with the cluster state metadata
 
         final ClusterState.Builder newStateBuilder = ClusterState.builder(oldState).routingTable(newRoutingTable).metadata(newMetadata);
@@ -225,6 +226,10 @@ public class AllocationService {
             }
         }
         return newStateBuilder.build();
+    }
+
+    public boolean isIndexRoutingTableShardAllocationMetadataEnabled() {
+        return INDEX_ROUTING_SHARD_ALLOCATION_METADATA_ENABLED.get(settings);
     }
 
     // Used for testing
@@ -254,7 +259,7 @@ public class AllocationService {
         if (staleShards.isEmpty() && failedShards.isEmpty()) {
             return clusterState;
         }
-        ClusterState tmpState = IndexMetadataUpdater.removeStaleIdsWithoutRoutings(clusterState, staleShards, logger);
+        ClusterState tmpState = ShardAllocationMetadataUpdater.removeStaleIdsWithoutRoutings(clusterState, staleShards, isIndexRoutingTableShardAllocationMetadataEnabled(), logger);
 
         RoutingNodes routingNodes = getMutableRoutingNodes(tmpState);
         // shuffle the unassigned nodes, just so we won't have things like poison failed shards

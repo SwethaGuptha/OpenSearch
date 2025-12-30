@@ -93,12 +93,12 @@ public class RoutingAllocation {
 
     private final long currentNanoTime;
 
-    private final IndexMetadataUpdater indexMetadataUpdater = new IndexMetadataUpdater();
+    private final ShardAllocationMetadataUpdater shardAllocationMetadataUpdater = new ShardAllocationMetadataUpdater();
     private final RoutingNodesChangedObserver nodesChangedObserver = new RoutingNodesChangedObserver();
     private final RestoreInProgressUpdater restoreInProgressUpdater = new RestoreInProgressUpdater();
     private final RoutingChangesObserver routingChangesObserver = new RoutingChangesObserver.DelegatingRoutingChangesObserver(
         nodesChangedObserver,
-        indexMetadataUpdater,
+        shardAllocationMetadataUpdater,
         restoreInProgressUpdater
     );
 
@@ -127,7 +127,7 @@ public class RoutingAllocation {
         this.shardSizeInfo = shardSizeInfo;
         this.currentNanoTime = currentNanoTime;
         if (isMigratingToRemoteStore(metadata)) {
-            indexMetadataUpdater.setOngoingRemoteStoreMigration(true);
+            shardAllocationMetadataUpdater.setOngoingRemoteStoreMigration(true);
         }
     }
 
@@ -257,7 +257,7 @@ public class RoutingAllocation {
      * Remove the allocation id of the provided shard from the set of in-sync shard copies
      */
     public void removeAllocationId(ShardRouting shardRouting) {
-        indexMetadataUpdater.removeAllocationId(shardRouting);
+        shardAllocationMetadataUpdater.removeAllocationId(shardRouting);
     }
 
     /**
@@ -270,8 +270,22 @@ public class RoutingAllocation {
     /**
      * Returns updated {@link Metadata} based on the changes that were made to the routing nodes
      */
+    public RoutingTable updateRoutingTableWithRoutingAllocationChanges(RoutingTable oldRoutingTable, boolean updateRoutingAllocationMetadata) {
+        return shardAllocationMetadataUpdater.applyChanges(oldRoutingTable, metadata, routingNodes, updateRoutingAllocationMetadata);
+    }
+
+    /**
+     * Returns updated {@link Metadata} based on the changes that were made to the routing nodes
+     */
     public Metadata updateMetadataWithRoutingChanges(RoutingTable newRoutingTable) {
-        return indexMetadataUpdater.applyChanges(metadata, newRoutingTable, nodes());
+        return updateMetadataWithRoutingChanges(newRoutingTable, true);
+    }
+
+    /**
+     * Returns updated {@link Metadata} based on the changes that were made to the routing nodes
+     */
+    public Metadata updateMetadataWithRoutingChanges(RoutingTable newRoutingTable, boolean updateRoutingAllocationMetadata) {
+        return shardAllocationMetadataUpdater.applyChanges(metadata, newRoutingTable, nodes(), updateRoutingAllocationMetadata);
     }
 
     /**

@@ -54,6 +54,7 @@ import org.opensearch.cluster.metadata.IndexMetadata;
 import org.opensearch.cluster.metadata.ResolvedIndices;
 import org.opensearch.cluster.node.DiscoveryNode;
 import org.opensearch.cluster.routing.AllocationId;
+import org.opensearch.cluster.routing.IndexRoutingTable;
 import org.opensearch.cluster.routing.ShardRouting;
 import org.opensearch.cluster.service.ClusterService;
 import org.opensearch.common.Nullable;
@@ -99,6 +100,8 @@ import java.io.IOException;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
+
+import static org.opensearch.cluster.routing.allocation.ShardAllocationMetadataUpdater.INDEX_ROUTING_SHARD_ALLOCATION_METADATA_ENABLED;
 
 /**
  * Base class for requests that should be executed on a primary copy followed by replica copies.
@@ -1066,14 +1069,17 @@ public abstract class TransportReplicationAction<
                 }
                 final DiscoveryNode node = state.nodes().get(primary.currentNodeId());
                 if (primary.currentNodeId().equals(state.nodes().getLocalNodeId())) {
-                    performLocalAction(state, primary, node, indexMetadata);
+                    boolean indexRoutingShardAllocationMetadataEnabled = clusterService.getClusterSettings().get(INDEX_ROUTING_SHARD_ALLOCATION_METADATA_ENABLED);
+                    IndexRoutingTable indexRoutingTable = state.routingTable().index(request.shardId.getIndex());
+                    long primaryTerm = indexRoutingShardAllocationMetadataEnabled ? indexRoutingTable.getPrimaryTerm(primary.id()) : indexMetadata.primaryTerm(primary.id());
+                    performLocalAction(state, primary, node, primaryTerm);
                 } else {
                     performRemoteAction(state, primary, node);
                 }
             }
         }
 
-        private void performLocalAction(ClusterState state, ShardRouting primary, DiscoveryNode node, IndexMetadata indexMetadata) {
+        private void performLocalAction(ClusterState state, ShardRouting primary, DiscoveryNode node, long primaryTerm) {
             setPhase(task, "waiting_on_primary");
             if (logger.isTraceEnabled()) {
                 logger.trace(
@@ -1092,7 +1098,7 @@ public abstract class TransportReplicationAction<
                 new ConcreteShardRequest<>(
                     request,
                     primary.allocationId().getId(),
-                    indexMetadata.primaryTerm(primary.id()),
+                    primaryTerm,
                     true,
                     initiatedByNodeClient
                 )

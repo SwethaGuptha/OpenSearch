@@ -44,6 +44,7 @@ import org.opensearch.cluster.routing.allocation.ExistingShardsAllocator;
 import org.opensearch.cluster.routing.allocation.NodeAllocationResult;
 import org.opensearch.cluster.routing.allocation.RoutingAllocation;
 import org.opensearch.cluster.routing.allocation.decider.Decision;
+import org.opensearch.common.settings.Settings;
 import org.opensearch.core.index.shard.ShardId;
 
 import java.util.ArrayList;
@@ -62,6 +63,13 @@ import java.util.Set;
 public abstract class BaseGatewayShardAllocator {
 
     protected final Logger logger = LogManager.getLogger(this.getClass());
+
+    protected final Settings settings;
+
+    BaseGatewayShardAllocator(Settings settings) {
+        this.settings = settings;
+    }
+
 
     /**
      * Allocate an unassigned shard to nodes (if any) where valid copies of the shard already exist.

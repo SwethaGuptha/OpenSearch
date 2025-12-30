@@ -37,7 +37,7 @@ import static org.opensearch.indices.RemoteStoreSettings.CLUSTER_REMOTE_STORE_PA
 import static org.opensearch.indices.RemoteStoreSettings.CLUSTER_REMOTE_STORE_PATH_TYPE_SETTING;
 import static org.mockito.Mockito.mock;
 
-public class RemoteMigrationIndexMetadataUpdaterTests extends OpenSearchTestCase {
+public class RemoteMigrationShardAllocationMetadataUpdaterTests extends OpenSearchTestCase {
     private final String indexName = "test-index";
 
     public void testMaybeAddRemoteIndexSettingsAllPrimariesAndReplicasOnRemote() throws IOException {

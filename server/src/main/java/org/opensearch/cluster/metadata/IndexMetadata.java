@@ -41,7 +41,7 @@ import org.opensearch.cluster.DiffableUtils;
 import org.opensearch.cluster.block.ClusterBlock;
 import org.opensearch.cluster.block.ClusterBlockLevel;
 import org.opensearch.cluster.node.DiscoveryNodeFilters;
-import org.opensearch.cluster.routing.allocation.IndexMetadataUpdater;
+import org.opensearch.cluster.routing.allocation.ShardAllocationMetadataUpdater;
 import org.opensearch.cluster.routing.allocation.decider.ShardsLimitAllocationDecider;
 import org.opensearch.common.Nullable;
 import org.opensearch.common.annotation.PublicApi;
@@ -1200,10 +1200,14 @@ public class IndexMetadata implements Diffable<IndexMetadata>, ToXContentFragmen
      * a primary shard is assigned after a full cluster restart or a replica shard is promoted to a primary.
      * <p>
      * Note: since we increment the term every time a shard is assigned, the term for any operational shard (i.e., a shard
-     * that can be indexed into) is larger than 0. See {@link IndexMetadataUpdater#applyChanges}.
+     * that can be indexed into) is larger than 0. See {@link ShardAllocationMetadataUpdater#applyChanges}.
      **/
     public long primaryTerm(int shardId) {
         return this.primaryTerms[shardId];
+    }
+
+    public long[] getPrimaryTerms() {
+        return this.primaryTerms.clone();
     }
 
     /**

@@ -48,6 +48,7 @@ import org.opensearch.cluster.routing.allocation.RoutingAllocation;
 import org.opensearch.cluster.routing.allocation.decider.Decision;
 import org.opensearch.common.Nullable;
 import org.opensearch.common.collect.Tuple;
+import org.opensearch.common.settings.Settings;
 import org.opensearch.common.unit.TimeValue;
 import org.opensearch.core.common.unit.ByteSizeValue;
 import org.opensearch.index.store.StoreFileMetadata;
@@ -72,6 +73,11 @@ import static org.opensearch.cluster.routing.UnassignedInfo.INDEX_DELAYED_NODE_L
  * @opensearch.internal
  */
 public abstract class ReplicaShardAllocator extends BaseGatewayShardAllocator {
+
+    public ReplicaShardAllocator(Settings settings) {
+        super(settings);
+    }
+
     protected boolean shouldSkipFetchForRecovery(ShardRouting shard) {
         if (shard.primary()) {
             return true;

@@ -14,6 +14,7 @@ import org.opensearch.cluster.routing.RoutingNodes;
 import org.opensearch.cluster.routing.ShardRouting;
 import org.opensearch.cluster.routing.allocation.AllocateUnassignedDecision;
 import org.opensearch.cluster.routing.allocation.RoutingAllocation;
+import org.opensearch.common.settings.Settings;
 import org.opensearch.core.index.shard.ShardId;
 import org.opensearch.gateway.AsyncShardFetch.FetchResult;
 import org.opensearch.gateway.TransportNodesGatewayStartedShardHelper.GatewayStartedShard;
@@ -47,6 +48,10 @@ import java.util.Set;
  * @opensearch.internal
  */
 public abstract class PrimaryShardBatchAllocator extends PrimaryShardAllocator {
+
+    public PrimaryShardBatchAllocator(Settings settings) {
+        super(settings);
+    }
 
     abstract protected FetchResult<NodeGatewayStartedShardsBatch> fetchData(
         List<ShardRouting> eligibleShards,

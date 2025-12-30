@@ -84,7 +84,7 @@ public class ReplicaShardBatchAllocatorTests extends OpenSearchAllocationTestCas
 
     @Before
     public void buildTestAllocator() {
-        this.testBatchAllocator = new TestBatchAllocator();
+        this.testBatchAllocator = new TestBatchAllocator(Settings.EMPTY);
     }
 
     public static void setUpShards(int numberOfShards) {
@@ -992,6 +992,10 @@ public class ReplicaShardBatchAllocatorTests extends OpenSearchAllocationTestCas
         private Map<DiscoveryNode, TransportNodesListShardStoreMetadataBatch.NodeStoreFilesMetadataBatch> data = null;
         private AtomicBoolean fetchDataCalled = new AtomicBoolean(false);
         private AtomicInteger eligibleShardFetchDataCount = new AtomicInteger(0);
+
+        public TestBatchAllocator(Settings settings) {
+            super(settings);
+        }
 
         public void clean() {
             data = null;

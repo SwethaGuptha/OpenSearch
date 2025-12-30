@@ -262,10 +262,7 @@ public class SegmentReplicationSourceService extends AbstractLifecycleComponent 
                 if (indexService.getIndexSettings().isSegRepEnabledOrRemoteNode()) {
                     for (IndexShard indexShard : indexService) {
                         if (indexShard.routingEntry().primary()) {
-                            final IndexMetadata indexMetadata = indexService.getIndexSettings().getIndexMetadata();
-                            final Set<String> inSyncAllocationIds = new HashSet<>(
-                                indexMetadata.inSyncAllocationIds(indexShard.shardId().id())
-                            );
+                            final Set<String> inSyncAllocationIds = indexShard.getInSyncAllocationIds();
                             if (indexShard.isPrimaryMode()) {
                                 final Set<String> shardTrackerInSyncIds = indexShard.getReplicationGroup().getInSyncAllocationIds();
                                 inSyncAllocationIds.addAll(shardTrackerInSyncIds);

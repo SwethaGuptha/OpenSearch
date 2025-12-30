@@ -50,6 +50,7 @@ import org.opensearch.cluster.routing.allocation.RoutingAllocation;
 import org.opensearch.common.Priority;
 import org.opensearch.common.inject.Inject;
 import org.opensearch.common.lease.Releasables;
+import org.opensearch.common.settings.Settings;
 import org.opensearch.common.util.concurrent.ConcurrentCollections;
 import org.opensearch.common.util.set.Sets;
 import org.opensearch.core.action.ActionListener;
@@ -94,11 +95,12 @@ public class GatewayAllocator implements ExistingShardsAllocator {
         RerouteService rerouteService,
         TransportNodesListGatewayStartedShards startedAction,
         TransportNodesListShardStoreMetadata storeAction,
+        Settings settings,
         ClusterManagerMetrics clusterManagerMetrics
     ) {
         this.rerouteService = rerouteService;
-        this.primaryShardAllocator = new InternalPrimaryShardAllocator(startedAction, clusterManagerMetrics);
-        this.replicaShardAllocator = new InternalReplicaShardAllocator(storeAction, clusterManagerMetrics);
+        this.primaryShardAllocator = new InternalPrimaryShardAllocator(startedAction, settings, clusterManagerMetrics);
+        this.replicaShardAllocator = new InternalReplicaShardAllocator(storeAction, settings, clusterManagerMetrics);
     }
 
     @Override
@@ -279,7 +281,8 @@ public class GatewayAllocator implements ExistingShardsAllocator {
         private final TransportNodesListGatewayStartedShards startedAction;
         private final ClusterManagerMetrics clusterManagerMetrics;
 
-        InternalPrimaryShardAllocator(TransportNodesListGatewayStartedShards startedAction, ClusterManagerMetrics clusterManagerMetrics) {
+        InternalPrimaryShardAllocator(TransportNodesListGatewayStartedShards startedAction, Settings settings, ClusterManagerMetrics clusterManagerMetrics) {
+            super(settings);
             this.startedAction = startedAction;
             this.clusterManagerMetrics = clusterManagerMetrics;
         }
@@ -321,7 +324,8 @@ public class GatewayAllocator implements ExistingShardsAllocator {
         private final TransportNodesListShardStoreMetadata storeAction;
         private final ClusterManagerMetrics clusterManagerMetrics;
 
-        InternalReplicaShardAllocator(TransportNodesListShardStoreMetadata storeAction, ClusterManagerMetrics clusterManagerMetrics) {
+        InternalReplicaShardAllocator(TransportNodesListShardStoreMetadata storeAction, Settings settings, ClusterManagerMetrics clusterManagerMetrics) {
+            super(settings);
             this.storeAction = storeAction;
             this.clusterManagerMetrics = clusterManagerMetrics;
         }

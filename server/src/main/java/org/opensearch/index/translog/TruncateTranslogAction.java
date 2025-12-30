@@ -198,6 +198,7 @@ public class TruncateTranslogAction {
                 "",
                 false
             );
+            // TODO: Read primaryTerm from IndexRoutingTable?
             long primaryTerm = indexSettings.getIndexMetadata().primaryTerm(shardPath.getShardId().id());
             // We open translog to check for corruption, do not clean anything.
             final TranslogDeletionPolicy retainAllTranslogPolicy = new DefaultTranslogDeletionPolicy(

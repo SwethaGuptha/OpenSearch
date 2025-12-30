@@ -118,16 +118,7 @@ import java.io.IOException;
 import java.io.UnsupportedEncodingException;
 import java.nio.file.Path;
 import java.time.Instant;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Locale;
-import java.util.Map;
-import java.util.Objects;
-import java.util.Optional;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
@@ -154,6 +145,7 @@ import static org.opensearch.cluster.metadata.IndexMetadata.SETTING_REMOTE_TRANS
 import static org.opensearch.cluster.metadata.IndexMetadata.SETTING_REPLICATION_TYPE;
 import static org.opensearch.cluster.metadata.Metadata.DEFAULT_REPLICA_COUNT_SETTING;
 import static org.opensearch.cluster.metadata.MetadataIndexTemplateService.findContextTemplateName;
+import static org.opensearch.cluster.routing.allocation.ShardAllocationMetadataUpdater.INDEX_ROUTING_SHARD_ALLOCATION_METADATA_ENABLED;
 import static org.opensearch.cluster.routing.allocation.decider.ShardsLimitAllocationDecider.INDEX_TOTAL_PRIMARY_SHARDS_PER_NODE_SETTING;
 import static org.opensearch.cluster.routing.allocation.decider.ShardsLimitAllocationDecider.INDEX_TOTAL_REMOTE_CAPABLE_PRIMARY_SHARDS_PER_NODE_SETTING;
 import static org.opensearch.cluster.service.ClusterManagerTask.CREATE_INDEX;
@@ -543,6 +535,7 @@ public class MetadataCreateIndexService {
                 Optional.ofNullable(contextTemplate).map(Template::aliases).orElse(Map.of())
             );
 
+            boolean indexRoutingShardAllocationMetadataEnabled = clusterService.getClusterSettings().get(INDEX_ROUTING_SHARD_ALLOCATION_METADATA_ENABLED);
             final IndexMetadata indexMetadata;
             try {
                 indexMetadata = buildIndexMetadata(
@@ -554,7 +547,8 @@ public class MetadataCreateIndexService {
                     sourceMetadata,
                     temporaryIndexMeta.isSystem(),
                     temporaryIndexMeta.getCustomData(),
-                    temporaryIndexMeta.context()
+                    temporaryIndexMeta.context(),
+                    indexRoutingShardAllocationMetadataEnabled
                 );
             } catch (Exception e) {
                 logger.info("failed to build index metadata [{}]", request.index());
@@ -572,7 +566,7 @@ public class MetadataCreateIndexService {
             );
 
             indexService.getIndexEventListener().beforeIndexAddedToCluster(indexMetadata.getIndex(), indexMetadata.getSettings());
-            return clusterStateCreateIndex(currentState, request.blocks(), indexMetadata, allocationService::reroute, metadataTransformer);
+            return clusterStateCreateIndex(currentState, request.blocks(), indexMetadata, allocationService::reroute, metadataTransformer, sourceMetadata != null, indexRoutingShardAllocationMetadataEnabled);
         });
     }
 
@@ -1345,6 +1339,18 @@ public class MetadataCreateIndexService {
         BiFunction<ClusterState, String, ClusterState> rerouteRoutingTable,
         BiConsumer<Metadata.Builder, IndexMetadata> metadataTransformer
     ) {
+        return clusterStateCreateIndex(currentState, clusterBlocks, indexMetadata, rerouteRoutingTable, metadataTransformer, false, false);
+    }
+
+    static ClusterState clusterStateCreateIndex(
+        ClusterState currentState,
+        Set<ClusterBlock> clusterBlocks,
+        IndexMetadata indexMetadata,
+        BiFunction<ClusterState, String, ClusterState> rerouteRoutingTable,
+        BiConsumer<Metadata.Builder, IndexMetadata> metadataTransformer,
+        boolean recoverFromExistingIndex,
+        boolean indexRoutingShardAllocationMetadataEnabled
+    ) {
         Metadata.Builder builder = Metadata.builder(currentState.metadata()).put(indexMetadata, false);
         if (metadataTransformer != null) {
             metadataTransformer.accept(builder, indexMetadata);
@@ -1357,8 +1363,17 @@ public class MetadataCreateIndexService {
 
         ClusterState updatedState = ClusterState.builder(currentState).blocks(blocks).metadata(newMetadata).build();
 
-        RoutingTable.Builder routingTableBuilder = RoutingTable.builder(updatedState.routingTable())
-            .addAsNew(updatedState.metadata().index(indexName));
+        RoutingTable.Builder routingTableBuilder;
+        if (recoverFromExistingIndex && indexRoutingShardAllocationMetadataEnabled) {
+            IndexRoutingTable indexRoutingTable = currentState.routingTable().index(indexMetadata.getIndex());
+            long[] newPrimaryTerms = new long[indexMetadata.getNumberOfShards()];
+            Arrays.fill(newPrimaryTerms, computePrimaryTermForExistingIndex(indexMetadata.getNumberOfShards(), indexRoutingTable.getPrimaryTerms()));
+            routingTableBuilder = RoutingTable.builder(updatedState.routingTable())
+                .addAsNew(indexMetadata, newPrimaryTerms, new HashMap<>());
+        } else {
+            routingTableBuilder = RoutingTable.builder(updatedState.routingTable())
+                .addAsNew(updatedState.metadata().index(indexName));
+        }
         updatedState = ClusterState.builder(updatedState).routingTable(routingTableBuilder.build()).build();
         return rerouteRoutingTable.apply(updatedState, "index [" + indexName + "] created");
     }
@@ -1374,7 +1389,22 @@ public class MetadataCreateIndexService {
         Map<String, DiffableStringMap> customData,
         Context context
     ) {
-        IndexMetadata.Builder indexMetadataBuilder = createIndexMetadataBuilder(indexName, sourceMetadata, indexSettings, routingNumShards);
+        return buildIndexMetadata(indexName, aliases, documentMapperSupplier, indexSettings, routingNumShards, sourceMetadata, isSystem, customData, context, false);
+    }
+
+    static IndexMetadata buildIndexMetadata(
+        String indexName,
+        List<AliasMetadata> aliases,
+        Supplier<DocumentMapper> documentMapperSupplier,
+        Settings indexSettings,
+        int routingNumShards,
+        @Nullable IndexMetadata sourceMetadata,
+        boolean isSystem,
+        Map<String, DiffableStringMap> customData,
+        Context context,
+        boolean indexRoutingShardAllocationMetadataEnabled
+    ) {
+        IndexMetadata.Builder indexMetadataBuilder = createIndexMetadataBuilder(indexName, sourceMetadata, indexSettings, routingNumShards, indexRoutingShardAllocationMetadataEnabled);
         indexMetadataBuilder.system(isSystem);
         // now, update the mappings with the actual source
         Map<String, MappingMetadata> mappingsMetadata = new HashMap<>();
@@ -1414,25 +1444,39 @@ public class MetadataCreateIndexService {
         Settings indexSettings,
         int routingNumShards
     ) {
-        final IndexMetadata.Builder builder = IndexMetadata.builder(indexName);
-        builder.setRoutingNumShards(routingNumShards);
-        builder.settings(indexSettings);
+        return createIndexMetadataBuilder(indexName, sourceMetadata, indexSettings, routingNumShards, false);
+    }
 
-        if (sourceMetadata != null) {
-            /*
-             * We need to arrange that the primary term on all the shards in the shrunken index is at least as large as
-             * the maximum primary term on all the shards in the source index. This ensures that we have correct
-             * document-level semantics regarding sequence numbers in the shrunken index.
-             */
-            final long primaryTerm = IntStream.range(0, sourceMetadata.getNumberOfShards())
-                .mapToLong(sourceMetadata::primaryTerm)
-                .max()
-                .getAsLong();
-            for (int shardId = 0; shardId < builder.numberOfShards(); shardId++) {
-                builder.primaryTerm(shardId, primaryTerm);
+    private static IndexMetadata.Builder createIndexMetadataBuilder(
+        String indexName,
+        @Nullable IndexMetadata sourceMetadata,
+        Settings indexSettings,
+        int routingNumShards,
+        boolean indexRoutingShardAllocationMetadataEnabled
+    ) {
+            final IndexMetadata.Builder builder = IndexMetadata.builder(indexName);
+            builder.setRoutingNumShards(routingNumShards);
+            builder.settings(indexSettings);
+
+            if (sourceMetadata != null && !indexRoutingShardAllocationMetadataEnabled) {
+                long newPrimaryTerm = computePrimaryTermForExistingIndex(sourceMetadata.getNumberOfShards(), sourceMetadata.getPrimaryTerms());
+                for (int shardId = 0; shardId < builder.numberOfShards(); shardId++) {
+                    builder.primaryTerm(shardId, newPrimaryTerm);
+                }
             }
-        }
-        return builder;
+            return builder;
+    }
+
+    private static long computePrimaryTermForExistingIndex(int numberOfShards, long[] currentPrimaryTerms) {
+        /*
+         * We need to arrange that the primary term on all the shards in the shrunken index is at least as large as
+         * the maximum primary term on all the shards in the source index. This ensures that we have correct
+         * document-level semantics regarding sequence numbers in the shrunken index.
+         */
+        return IntStream.range(0, numberOfShards)
+            .mapToLong(i -> currentPrimaryTerms[i])
+            .max()
+            .getAsLong();
     }
 
     private static ClusterBlocks.Builder createClusterBlocksBuilder(ClusterState currentState, String index, Set<ClusterBlock> blocks) {

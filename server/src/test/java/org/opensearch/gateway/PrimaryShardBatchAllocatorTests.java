@@ -72,7 +72,7 @@ public class PrimaryShardBatchAllocatorTests extends OpenSearchAllocationTestCas
 
     @Before
     public void buildTestAllocator() {
-        this.batchAllocator = new TestBatchAllocator();
+        this.batchAllocator = new TestBatchAllocator(Settings.EMPTY);
     }
 
     private void allocateAllUnassignedBatch(final RoutingAllocation allocation) {
@@ -375,6 +375,10 @@ public class PrimaryShardBatchAllocatorTests extends OpenSearchAllocationTestCas
     class TestBatchAllocator extends PrimaryShardBatchAllocator {
 
         private Map<DiscoveryNode, TransportNodesListGatewayStartedShardsBatch.NodeGatewayStartedShardsBatch> data;
+
+        public TestBatchAllocator(Settings settings) {
+            super(settings);
+        }
 
         public TestBatchAllocator clear() {
             data = null;

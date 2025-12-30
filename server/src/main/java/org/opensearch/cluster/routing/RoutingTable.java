@@ -612,6 +612,17 @@ public class RoutingTable implements Iterable<IndexRoutingTable>, Diffable<Routi
             return this;
         }
 
+        public Builder addAsNew(IndexMetadata indexMetadata, long[] primaryTerm, Map<Integer, Set<String>> inSyncAllocationIds) {
+            if (indexMetadata.getState() == IndexMetadata.State.OPEN) {
+                IndexRoutingTable.Builder indexRoutingBuilder = new IndexRoutingTable.Builder(indexMetadata.getIndex())
+                    .initializeAsNew(indexMetadata)
+                    .setPrimaryTerms(primaryTerm)
+                    .setInSyncAllocationIds(inSyncAllocationIds);
+                add(indexRoutingBuilder);
+            }
+            return this;
+        }
+
         public Builder addAsRecovery(IndexMetadata indexMetadata) {
             if (indexMetadata.getState() == IndexMetadata.State.OPEN || isIndexVerifiedBeforeClosed(indexMetadata)) {
                 IndexRoutingTable.Builder indexRoutingBuilder = new IndexRoutingTable.Builder(indexMetadata.getIndex())

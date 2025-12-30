@@ -95,7 +95,7 @@ public class PrimaryShardAllocatorTests extends OpenSearchAllocationTestCase {
 
     @Before
     public void buildTestAllocator() {
-        this.testAllocator = new TestAllocator();
+        this.testAllocator = new TestAllocator(Settings.EMPTY);
     }
 
     private void allocateAllUnassigned(final RoutingAllocation allocation) {
@@ -790,6 +790,10 @@ public class PrimaryShardAllocatorTests extends OpenSearchAllocationTestCase {
     class TestAllocator extends PrimaryShardAllocator {
 
         private Map<DiscoveryNode, TransportNodesListGatewayStartedShards.NodeGatewayStartedShards> data;
+
+        public TestAllocator(Settings settings) {
+            super(settings);
+        }
 
         public TestAllocator clear() {
             data = null;

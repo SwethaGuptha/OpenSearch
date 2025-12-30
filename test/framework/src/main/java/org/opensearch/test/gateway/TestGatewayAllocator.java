@@ -37,6 +37,7 @@ import org.opensearch.cluster.node.DiscoveryNodes;
 import org.opensearch.cluster.routing.ShardRouting;
 import org.opensearch.cluster.routing.allocation.FailedShard;
 import org.opensearch.cluster.routing.allocation.RoutingAllocation;
+import org.opensearch.common.settings.Settings;
 import org.opensearch.core.index.shard.ShardId;
 import org.opensearch.gateway.AsyncShardFetch;
 import org.opensearch.gateway.GatewayAllocator;
@@ -75,7 +76,7 @@ public class TestGatewayAllocator extends GatewayAllocator {
     DiscoveryNodes currentNodes = DiscoveryNodes.EMPTY_NODES;
     Map<String, ReplicationCheckpoint> shardIdNodeToReplicationCheckPointMap = new HashMap<>();
 
-    PrimaryShardAllocator primaryShardAllocator = new PrimaryShardAllocator() {
+    PrimaryShardAllocator primaryShardAllocator = new PrimaryShardAllocator(Settings.EMPTY) {
         @Override
         protected AsyncShardFetch.FetchResult<NodeGatewayStartedShards> fetchData(ShardRouting shard, RoutingAllocation allocation) {
             // for now always return immediately what we know
@@ -114,7 +115,7 @@ public class TestGatewayAllocator extends GatewayAllocator {
         return shardIdNodeToReplicationCheckPointMap.getOrDefault(getReplicationCheckPointKey(shardId, nodeName), null);
     }
 
-    ReplicaShardAllocator replicaShardAllocator = new ReplicaShardAllocator() {
+    ReplicaShardAllocator replicaShardAllocator = new ReplicaShardAllocator(Settings.EMPTY) {
         @Override
         protected AsyncShardFetch.FetchResult<NodeStoreFilesMetadata> fetchData(ShardRouting shard, RoutingAllocation allocation) {
             // for now, just pretend no node has data
